@@ -378,7 +378,10 @@ function animateCounter(elementId, targetVal, isPct = false) {
 
 async function fetchDashboardStats() {
   try {
-    let url = `${API_BASE}/reports/overview`;
+    const type = document.getElementById('filter-vehicle-type').value;
+    const region = document.getElementById('filter-vehicle-region').value;
+    
+    let url = `${API_BASE}/reports/overview?type=${encodeURIComponent(type)}&region=${encodeURIComponent(region)}`;
     const res = await authFetch(url);
     const data = await res.json();
 

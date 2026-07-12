@@ -564,20 +564,78 @@ app.post('/api/expenses', authenticateToken, async (req, res) => {
 // ---------------- REPORT & ANALYTICS ROUTES ----------------
 
 app.get('/api/reports/overview', authenticateToken, async (req, res) => {
+  const { type, region } = req.query;
+  
   try {
     const db = await getDb();
 
-    // Counts
-    const activeVehicles = await db.get("SELECT COUNT(*) as count FROM vehicles WHERE status = 'On Trip'");
-    const availableVehicles = await db.get("SELECT COUNT(*) as count FROM vehicles WHERE status = 'Available'");
-    const maintenanceVehicles = await db.get("SELECT COUNT(*) as count FROM vehicles WHERE status = 'In Shop'");
-    const totalVehicles = await db.get("SELECT COUNT(*) as count FROM vehicles WHERE status != 'Retired'");
+    // Base conditions
+    let vehWhere = "WHERE status != 'Retired'";
+    let activeVehWhere = "WHERE status = 'On Trip'";
+    let availVehWhere = "WHERE status = 'Available'";
+    let maintVehWhere = "WHERE status = 'In Shop'";
+    let activeTripsWhere = "WHERE t.status = 'Dispatched'";
+    let pendingTripsWhere = "WHERE t.status = 'Draft'";
+    let completedTripsWhere = "WHERE t.status = 'Completed'";
+    
+    const params = [];
+    if (type) {
+      vehWhere += " AND type = ?";
+      activeVehWhere += " AND type = ?";
+      availVehWhere += " AND type = ?";
+      maintVehWhere += " AND type = ?";
+      activeTripsWhere += " AND v.type = ?";
+      pendingTripsWhere += " AND v.type = ?";
+      completedTripsWhere += " AND v.type = ?";
+      params.push(type);
+    }
+    
+    if (region) {
+      vehWhere += " AND region = ?";
+      activeVehWhere += " AND region = ?";
+      availVehWhere += " AND region = ?";
+      maintVehWhere += " AND region = ?";
+      activeTripsWhere += " AND v.region = ?";
+      pendingTripsWhere += " AND v.region = ?";
+      completedTripsWhere += " AND v.region = ?";
+      params.push(region);
+    }
 
-    const activeTrips = await db.get("SELECT COUNT(*) as count FROM trips WHERE status = 'Dispatched'");
-    const pendingTrips = await db.get("SELECT COUNT(*) as count FROM trips WHERE status = 'Draft'");
-    const completedTrips = await db.get("SELECT COUNT(*) as count FROM trips WHERE status = 'Completed'");
+    const activeVehicles = await db.get(`SELECT COUNT(*) as count FROM vehicles ${activeVehWhere}`, params);
+    const availableVehicles = await db.get(`SELECT COUNT(*) as count FROM vehicles ${availVehWhere}`, params);
+    const maintenanceVehicles = await db.get(`SELECT COUNT(*) as count FROM vehicles ${maintVehWhere}`, params);
+    const totalVehicles = await db.get(`SELECT COUNT(*) as count FROM vehicles ${vehWhere}`, params);
 
-    const driversOnDuty = await db.get("SELECT COUNT(*) as count FROM drivers WHERE status IN ('Available', 'On Trip')");
+    const activeTrips = await db.get(`
+      SELECT COUNT(*) as count FROM trips t 
+      JOIN vehicles v ON t.vehicle_id = v.id 
+      ${activeTripsWhere}`, params);
+      
+    const pendingTrips = await db.get(`
+      SELECT COUNT(*) as count FROM trips t 
+      JOIN vehicles v ON t.vehicle_id = v.id 
+      ${pendingTripsWhere}`, params);
+
+    // Drivers on duty (filtered by assigned dispatched vehicles type/region if filters are applied)
+    let driversQuery = `SELECT COUNT(*) as count FROM drivers WHERE status IN ('Available', 'On Trip')`;
+    const driverParams = [];
+    if (type || region) {
+      driversQuery = `
+        SELECT COUNT(DISTINCT d.id) as count FROM drivers d
+        LEFT JOIN trips t ON t.driver_id = d.id AND t.status = 'Dispatched'
+        LEFT JOIN vehicles v ON t.vehicle_id = v.id
+        WHERE d.status IN ('Available', 'On Trip')
+      `;
+      if (type) {
+        driversQuery += " AND (v.type = ? OR v.type IS NULL)";
+        driverParams.push(type);
+      }
+      if (region) {
+        driversQuery += " AND (v.region = ? OR v.region IS NULL)";
+        driverParams.push(region);
+      }
+    }
+    const driversOnDuty = await db.get(driversQuery, driverParams);
 
     const utilization = totalVehicles.count > 0 
       ? Math.round((activeVehicles.count / totalVehicles.count) * 100) 
@@ -589,7 +647,6 @@ app.get('/api/reports/overview', authenticateToken, async (req, res) => {
       maintenanceVehicles: maintenanceVehicles.count,
       activeTrips: activeTrips.count,
       pendingTrips: pendingTrips.count,
-      completedTrips: completedTrips.count,
       driversOnDuty: driversOnDuty.count,
       fleetUtilization: utilization
     });
